@@ -14,6 +14,9 @@ interface CharacterLike {
 	Dialog?: DialogLine[];
 	IsPlayer?: () => boolean;
 	IsOnline?: () => boolean;
+	Name?: string;
+	Nickname?: string;
+	MemberNumber?: number;
 	[key: string | symbol]: unknown;
 }
 
@@ -38,6 +41,8 @@ declare global {
 	function InventoryIsBlockedByDistance(character: CharacterLike): boolean;
 	function CommonSetScreen(module: string, screen: string): void;
 	function DialogCanPerformCharacterAction(): boolean;
+	function CharacterNickname(character: CharacterLike): string;
+	function CommonGetScreen(): string;
 }
 
 const MINI_GAMES: readonly MiniGameDefinition[] = Object.freeze([
@@ -125,6 +130,10 @@ const MINI_GAMES: readonly MiniGameDefinition[] = Object.freeze([
 
 const GAME_LOOKUP = new Map(MINI_GAMES.map((game) => [game.id, game]));
 
+interface OpponentGameConfig {
+	prepareState: (opponent: CharacterLike) => void;
+}
+
 const SELF_MAIN_STAGE = "100";
 const SELF_SUBMENU_STAGE = "9100";
 const TARGET_MAIN_STAGE = "40";
@@ -138,6 +147,18 @@ type CharacterBuildDialogFn = (character: CharacterLike, csv: string[][], functi
 let originalCharacterBuildDialog: CharacterBuildDialogFn | undefined;
 let originalDialogCanPerformCharacterAction: (() => boolean) | undefined;
 
+const OPPONENT_REQUIRED_GAMES: Record<string, OpponentGameConfig> = {
+	Tennis: {
+		prepareState: (opponent: CharacterLike) => {
+			(globalThis as Record<string, unknown>).TennisCharacterLeft = Player ?? null;
+			(globalThis as Record<string, unknown>).TennisCharacterRight = opponent ?? null;
+			// Ensure names exist so the UI renders properly
+			if (Player && !Player.Name) Player.Name = CharacterNickname(Player);
+			if (opponent && !opponent.Name) opponent.Name = CharacterNickname(opponent);
+		},
+	},
+};
+
 export function registerMiniGameMenu(): void {
 	installGlobalHelpers();
 	patchCharacterBuildDialog();
@@ -150,6 +171,9 @@ function installGlobalHelpers(): void {
 
 	if (!globalObj.DialogBCMAStartMiniGame) {
 		globalObj.DialogBCMAStartMiniGame = (id: string): boolean => startMiniGame(id);
+	}
+	if (!globalObj.DialogBCMAStartMiniGameTarget) {
+		globalObj.DialogBCMAStartMiniGameTarget = (id: string): boolean => startMiniGameWithTarget(id);
 	}
 	if (!globalObj.DialogBCMACanShowMiniGamesSelf) {
 		globalObj.DialogBCMACanShowMiniGamesSelf = (): boolean => isInChatRoom();
@@ -297,7 +321,7 @@ function buildSubMenuLines(selfMenu: boolean): DialogLine[] {
 				Stage: submenuStage,
 				Option: selfMenu ? game.labelSelf : game.labelTarget,
 				Result: selfMenu ? game.descriptionSelf : game.descriptionTarget,
-				Function: `DialogBCMAStartMiniGame("${game.id}")`,
+				Function: selfMenu ? `DialogBCMAStartMiniGame("${game.id}")` : `DialogBCMAStartMiniGameTarget("${game.id}")`,
 			}),
 		);
 	}
@@ -346,14 +370,49 @@ function startMiniGame(id: string): boolean {
 		console.warn(`[BCMA] Unknown mini-game requested: ${id}`);
 		return false;
 	}
-	if (typeof MiniGameStart !== "function") return false;
-	try {
-		MiniGameStart(definition.id, definition.difficulty ?? 0, "DialogBCMAMiniGameReturn");
-		return true;
-	} catch (error) {
-		console.error("[BCMA] Failed to start mini-game", id, error);
+
+	launchMiniGame(definition);
+	return true;
+}
+
+function startMiniGameWithTarget(id: string): boolean {
+	const definition = GAME_LOOKUP.get(id);
+	if (!definition) {
+		console.warn(`[BCMA] Unknown mini-game requested: ${id}`);
 		return false;
 	}
+	const opponent = CurrentCharacter;
+	if (!opponent || typeof opponent.IsOnline !== "function" || !opponent.IsOnline()) {
+		console.warn("[BCMA] No valid opponent selected");
+		return false;
+	}
+	const opponentConfig = OPPONENT_REQUIRED_GAMES[id];
+	if (opponentConfig) {
+		opponentConfig.prepareState(opponent);
+	}
+	launchMiniGame(definition);
+	return true;
+}
+
+function launchMiniGame(definition: MiniGameDefinition): void {
+	if (typeof MiniGameStart !== "function")
+		return;
+
+	try {
+		MiniGameStart(definition.id, definition.difficulty ?? 0, "DialogBCMAMiniGameReturn");
+	} catch (error) {
+		console.error("[BCMA] Failed to start mini-game", definition.id, error);
+	}
+}
+
+function getCharacterDisplayName(character: CharacterLike): string {
+	if (character.Nickname)
+		return character.Nickname;
+	if (character.Name)
+		return character.Name;
+	if (typeof character.MemberNumber === "number")
+		return `Player ${character.MemberNumber}`;
+	return "Unknown player";
 }
 
 function isInChatRoom(): boolean {
