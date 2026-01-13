@@ -134,6 +134,7 @@ const GAME_LOOKUP = new Map(MINI_GAMES.map((game) => [game.id, game]));
 
 interface OpponentGameConfig {
 	prepareState: (opponent: CharacterLike) => void;
+	initSync?: (opponent: CharacterLike, matchId: string) => void;
 }
 
 const SELF_MAIN_STAGE = "100";
@@ -143,8 +144,19 @@ const TARGET_SUBMENU_STAGE = "9200";
 
 const SELF_DIALOG_FLAG = Symbol("bcma-self-dialog");
 const TARGET_DIALOG_FLAG = Symbol("bcma-target-dialog");
-const inviteIdToOpponent: Map<string, { gameId: string; opponent: CharacterLike }> = new Map();
+const inviteIdToOpponent: Map<string, { gameId: string; opponent: CharacterLike; matchId?: string }> = new Map();
 const pendingInviteResponseIds: Set<string> = new Set();
+interface TennisSyncState {
+	matchId: string;
+	opponentMember: number;
+	leftMember: number;
+	rightMember: number;
+	lastLeft: number;
+	lastRight: number;
+}
+let tennisSync: TennisSyncState | null = null;
+let suppressTennisBroadcast = false;
+let tennisHookInstalled = false;
 
 type CharacterBuildDialogFn = (character: CharacterLike, csv: string[][], functionPrefix: string, reload?: boolean) => void;
 
@@ -162,6 +174,7 @@ const OPPONENT_REQUIRED_GAMES: Record<string, OpponentGameConfig> = {
 			if (Player && !Player.Name) Player.Name = CharacterNickname(Player);
 			if (opponent && !opponent.Name) opponent.Name = CharacterNickname(opponent);
 		},
+		initSync: (opponent: CharacterLike, matchId: string) => initTennisSync(opponent, matchId),
 	},
 };
 
@@ -171,6 +184,7 @@ export function registerMiniGameMenu(): void {
 	patchCharacterActionCheck();
 	tryAugmentExistingDialogs();
 	ensureChatRoomMessageHook();
+	ensureTennisRunHook();
 }
 
 function installGlobalHelpers(): void {
@@ -404,17 +418,21 @@ function startMiniGameWithTarget(id: string): boolean {
 		const opponentMember = opponent.MemberNumber;
 		if (opponent.IsOwnedByPlayer?.()) {
 			opponentConfig.prepareState(opponent);
+			const matchId = generateMatchId();
+			opponentConfig.initSync?.(opponent, matchId);
 			sendHiddenBCMAMessage(opponentMember, {
 				action: "forceStart",
 				gameId: id,
 				initiator: Player?.MemberNumber ?? -1,
+				matchId,
 			});
 			launchMiniGame(definition);
 			return true;
 		}
 
+		const matchId = generateMatchId();
 		const inviteId = generateInviteId();
-		inviteIdToOpponent.set(inviteId, { gameId: id, opponent });
+		inviteIdToOpponent.set(inviteId, { gameId: id, opponent, matchId });
 		pendingInviteResponseIds.add(inviteId);
 		sendHiddenBCMAMessage(opponentMember, {
 			action: "invite",
@@ -423,6 +441,7 @@ function startMiniGameWithTarget(id: string): boolean {
 			initiator: Player?.MemberNumber ?? -1,
 			target: opponentMember,
 			initiatorName: getCharacterDisplayName(Player),
+			matchId,
 		});
 		window.alert(`BCMA: Invitation sent to ${getCharacterDisplayName(opponent)}.`);
 		return true;
@@ -440,6 +459,10 @@ function startMiniGameWithTarget(id: string): boolean {
 function launchMiniGame(definition: MiniGameDefinition): void {
 	if (typeof MiniGameStart !== "function")
 		return;
+
+	if (definition.id !== "Tennis") {
+		tennisSync = null;
+	}
 
 	try {
 		MiniGameStart(definition.id, definition.difficulty ?? 0, "DialogBCMAMiniGameReturn");
@@ -462,6 +485,7 @@ function getCharacterDisplayName(character?: CharacterLike | null): string {
 
 interface BCMAInvitePayloadBase {
 	gameId: string;
+	matchId?: string;
 }
 interface BCMAInvitePayload extends BCMAInvitePayloadBase {
 	action: "invite";
@@ -479,8 +503,16 @@ interface BCMAForcePayload extends BCMAInvitePayloadBase {
 	action: "forceStart";
 	initiator: number;
 }
+interface BCMATennisScorePayload extends BCMAInvitePayloadBase {
+	action: "tennisScore";
+	matchId: string;
+	leftMember: number;
+	rightMember: number;
+	leftPoints: number;
+	rightPoints: number;
+}
 
-type BCMAHiddenPayload = BCMAInvitePayload | BCMAInviteResponsePayload | BCMAForcePayload;
+type BCMAHiddenPayload = BCMAInvitePayload | BCMAInviteResponsePayload | BCMAForcePayload | BCMATennisScorePayload;
 
 function sendHiddenBCMAMessage(target: number, payload: BCMAHiddenPayload): void {
 	if (!ServerPlayerIsInChatRoom()) return;
@@ -521,6 +553,9 @@ function handleBCMAHiddenMessage(sender: number, payload: BCMAHiddenPayload): vo
 		case "forceStart":
 			handleForceStart(sender, payload);
 			break;
+		case "tennisScore":
+			handleTennisScore(payload);
+			break;
 		default:
 			break;
 	}
@@ -541,13 +576,17 @@ function handleIncomingInvite(sender: number, payload: BCMAInvitePayload): void 
 	}
 	const opponentConfig = OPPONENT_REQUIRED_GAMES[payload.gameId];
 	showInvitePrompt(`${payload.initiatorName} wants to play ${payload.gameId}. Accept?`, () => {
-		if (opponentConfig) opponentConfig.prepareState(opponent);
+		if (opponentConfig) {
+			opponentConfig.prepareState(opponent);
+			opponentConfig.initSync?.(opponent, payload.matchId ?? generateMatchId());
+		}
 		launchMiniGame(definition);
 		sendHiddenBCMAMessage(sender, {
 			action: "response",
 			id: payload.id,
 			gameId: payload.gameId,
 			accepted: true,
+			matchId: payload.matchId,
 		});
 		closeInvitePrompt();
 	}, () => {
@@ -556,6 +595,7 @@ function handleIncomingInvite(sender: number, payload: BCMAInvitePayload): void 
 			id: payload.id,
 			gameId: payload.gameId,
 			accepted: false,
+			matchId: payload.matchId,
 		});
 		closeInvitePrompt();
 	});
@@ -574,7 +614,10 @@ function handleInviteResponse(payload: BCMAInviteResponsePayload): void {
 	const definition = GAME_LOOKUP.get(info.gameId);
 	if (!definition) return;
 	const opponentConfig = OPPONENT_REQUIRED_GAMES[info.gameId];
-	if (opponentConfig) opponentConfig.prepareState(info.opponent);
+	if (opponentConfig) {
+		opponentConfig.prepareState(info.opponent);
+		opponentConfig.initSync?.(info.opponent, info.matchId ?? payload.matchId ?? generateMatchId());
+	}
 	launchMiniGame(definition);
 }
 
@@ -585,6 +628,7 @@ function handleForceStart(sender: number, payload: BCMAForcePayload): void {
 	const opponent = findChatRoomCharacter(sender);
 	if (!opponent) return;
 	opponentConfig.prepareState(opponent);
+	opponentConfig.initSync?.(opponent, payload.matchId ?? generateMatchId());
 	launchMiniGame(definition);
 }
 
@@ -677,12 +721,74 @@ function generateInviteId(): string {
 	return `${Player?.MemberNumber ?? "0"}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+function generateMatchId(): string {
+	return `${Player?.MemberNumber ?? "0"}-match-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 function isInChatRoom(): boolean {
 	try {
 		return typeof ServerPlayerIsInChatRoom === "function" && ServerPlayerIsInChatRoom();
 	} catch {
 		return false;
 	}
+}
+
+function ensureTennisRunHook(): void {
+	if (tennisHookInstalled)
+		return;
+	const globalObj = globalThis as Record<string, any>;
+	const original = globalObj.TennisRun;
+	if (typeof original !== "function") {
+		setTimeout(ensureTennisRunHook, 500);
+		return;
+	}
+	globalObj.TennisRun = function BCMATennisRun(this: unknown, ...args: any[]) {
+		const result = original.apply(this, args);
+		recordTennisScore();
+		return result;
+	};
+	tennisHookInstalled = true;
+}
+
+function initTennisSync(opponent: CharacterLike, matchId: string): void {
+	if (typeof Player?.MemberNumber !== "number" || typeof opponent.MemberNumber !== "number") {
+		tennisSync = null;
+		return;
+	}
+	const globalObj = globalThis as Record<string, any>;
+	tennisSync = {
+		matchId,
+		opponentMember: opponent.MemberNumber,
+		leftMember: Player.MemberNumber,
+		rightMember: opponent.MemberNumber,
+		lastLeft: typeof globalObj.TennisCharacterLeftPoint === "number" ? globalObj.TennisCharacterLeftPoint : 0,
+		lastRight: typeof globalObj.TennisCharacterRightPoint === "number" ? globalObj.TennisCharacterRightPoint : 0,
+	};
+}
+
+function recordTennisScore(): void {
+	if (!tennisSync || suppressTennisBroadcast)
+		return;
+	const globalObj = globalThis as Record<string, any>;
+	const left = typeof globalObj.TennisCharacterLeftPoint === "number" ? globalObj.TennisCharacterLeftPoint : 0;
+	const right = typeof globalObj.TennisCharacterRightPoint === "number" ? globalObj.TennisCharacterRightPoint : 0;
+	if (left === tennisSync.lastLeft && right === tennisSync.lastRight)
+		return;
+	tennisSync.lastLeft = left;
+	tennisSync.lastRight = right;
+	sendHiddenBCMAMessage(tennisSync.opponentMember, {
+		action: "tennisScore",
+		gameId: "Tennis",
+		matchId: tennisSync.matchId,
+		leftMember: tennisSync.leftMember,
+		rightMember: tennisSync.rightMember,
+		leftPoints: left,
+	rightPoints: right,
+	});
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
 }
 
 export {};
