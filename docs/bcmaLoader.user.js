@@ -17,8 +17,7 @@
 setTimeout(() => {
 	if (window.BCMA_LOADED === undefined) {
 		const script = document.createElement("script");
-		// script.setAttribute("crossorigin", "anonymous");
-		script.src = "https://lucifer-wen.github.io/BCMA-Bondage-Club-Multiplayer-Activities-/bcma.js?_=" + Date.now();
+		script.src = "https://lucifer-wen.github.io/BCMA-Bondage-Club-Multiplayer-Activities/bcma.js?_=" + Date.now();
 		script.onload = () => script.remove();
 		document.head.appendChild(script);
 	}
