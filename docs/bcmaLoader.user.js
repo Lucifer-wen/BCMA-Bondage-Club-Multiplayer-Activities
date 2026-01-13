@@ -7,9 +7,9 @@
 // @include      /^https:\/\/(www\.)?bondageprojects\.elementfx\.com\/R\d+\/(BondageClub|\d+)(\/((index|\d+)\.html)?)?$/
 // @include      /^https:\/\/(www\.)?bondage-europe\.com\/R\d+\/(BondageClub|\d+)(\/((index|\d+)\.html)?)?$/
 // @include      /^https:\/\/(www\.)?bondage-asia\.com\/club\/R\d+(\/((index|\d+)\.html)?)?$/
-// @homepage     https://github.com/Lucifer-wen/BCMA-Bondage-Club-Multiplayer-Activities-
-// @source       https://github.com/Lucifer-wen/BCMA-Bondage-Club-Multiplayer-Activities-
-// @downloadURL  https://lucifer-wen.github.io/BCMA-Bondage-Club-Multiplayer-Activities-/bcmaLoader.user.js
+// @homepage     https://github.com/Lucifer-wen/BCMA-Bondage-Club-Multiplayer-Activities
+// @source       https://github.com/Lucifer-wen/BCMA-Bondage-Club-Multiplayer-Activities
+// @downloadURL  https://lucifer-wen.github.io/BCMA-Bondage-Club-Multiplayer-Activities/bcmaLoader.user.js
 // @run-at       document-end
 // @grant        none
 // ==/UserScript==

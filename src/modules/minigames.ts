@@ -14,6 +14,7 @@ interface CharacterLike {
 	Dialog?: DialogLine[];
 	IsPlayer?: () => boolean;
 	IsOnline?: () => boolean;
+	IsOwnedByPlayer?: () => boolean;
 	Name?: string;
 	Nickname?: string;
 	MemberNumber?: number;
@@ -43,6 +44,7 @@ declare global {
 	function DialogCanPerformCharacterAction(): boolean;
 	function CharacterNickname(character: CharacterLike): string;
 	function CommonGetScreen(): string;
+	function ServerSend(Message: string, Data: any): void;
 }
 
 const MINI_GAMES: readonly MiniGameDefinition[] = Object.freeze([
@@ -141,11 +143,15 @@ const TARGET_SUBMENU_STAGE = "9200";
 
 const SELF_DIALOG_FLAG = Symbol("bcma-self-dialog");
 const TARGET_DIALOG_FLAG = Symbol("bcma-target-dialog");
+const inviteIdToOpponent: Map<string, { gameId: string; opponent: CharacterLike }> = new Map();
+const pendingInviteResponseIds: Set<string> = new Set();
 
 type CharacterBuildDialogFn = (character: CharacterLike, csv: string[][], functionPrefix: string, reload?: boolean) => void;
 
 let originalCharacterBuildDialog: CharacterBuildDialogFn | undefined;
 let originalDialogCanPerformCharacterAction: (() => boolean) | undefined;
+let chatRoomMessageHookInstalled = false;
+let inviteStylesInjected = false;
 
 const OPPONENT_REQUIRED_GAMES: Record<string, OpponentGameConfig> = {
 	Tennis: {
@@ -164,6 +170,7 @@ export function registerMiniGameMenu(): void {
 	patchCharacterBuildDialog();
 	patchCharacterActionCheck();
 	tryAugmentExistingDialogs();
+	ensureChatRoomMessageHook();
 }
 
 function installGlobalHelpers(): void {
@@ -371,6 +378,12 @@ function startMiniGame(id: string): boolean {
 		return false;
 	}
 
+	const opponentConfig = OPPONENT_REQUIRED_GAMES[id];
+	if (opponentConfig) {
+		window.alert("BCMA: Please click on the opponent's character actions to start this activity.");
+		return false;
+	}
+
 	launchMiniGame(definition);
 	return true;
 }
@@ -387,9 +400,39 @@ function startMiniGameWithTarget(id: string): boolean {
 		return false;
 	}
 	const opponentConfig = OPPONENT_REQUIRED_GAMES[id];
-	if (opponentConfig) {
-		opponentConfig.prepareState(opponent);
+	if (opponentConfig && typeof opponent.MemberNumber === "number") {
+		const opponentMember = opponent.MemberNumber;
+		if (opponent.IsOwnedByPlayer?.()) {
+			opponentConfig.prepareState(opponent);
+			sendHiddenBCMAMessage(opponentMember, {
+				action: "forceStart",
+				gameId: id,
+				initiator: Player?.MemberNumber ?? -1,
+			});
+			launchMiniGame(definition);
+			return true;
+		}
+
+		const inviteId = generateInviteId();
+		inviteIdToOpponent.set(inviteId, { gameId: id, opponent });
+		pendingInviteResponseIds.add(inviteId);
+		sendHiddenBCMAMessage(opponentMember, {
+			action: "invite",
+			id: inviteId,
+			gameId: id,
+			initiator: Player?.MemberNumber ?? -1,
+			target: opponentMember,
+			initiatorName: getCharacterDisplayName(Player),
+		});
+		window.alert(`BCMA: Invitation sent to ${getCharacterDisplayName(opponent)}.`);
+		return true;
 	}
+
+	if (opponentConfig) {
+		console.warn("[BCMA] Cannot start this game without a valid opponent.");
+		return false;
+	}
+
 	launchMiniGame(definition);
 	return true;
 }
@@ -405,7 +448,9 @@ function launchMiniGame(definition: MiniGameDefinition): void {
 	}
 }
 
-function getCharacterDisplayName(character: CharacterLike): string {
+function getCharacterDisplayName(character?: CharacterLike | null): string {
+	if (!character)
+		return "Unknown player";
 	if (character.Nickname)
 		return character.Nickname;
 	if (character.Name)
@@ -413,6 +458,223 @@ function getCharacterDisplayName(character: CharacterLike): string {
 	if (typeof character.MemberNumber === "number")
 		return `Player ${character.MemberNumber}`;
 	return "Unknown player";
+}
+
+interface BCMAInvitePayloadBase {
+	gameId: string;
+}
+interface BCMAInvitePayload extends BCMAInvitePayloadBase {
+	action: "invite";
+	id: string;
+	initiator: number;
+	target: number;
+	initiatorName: string;
+}
+interface BCMAInviteResponsePayload extends BCMAInvitePayloadBase {
+	action: "response";
+	id: string;
+	accepted: boolean;
+}
+interface BCMAForcePayload extends BCMAInvitePayloadBase {
+	action: "forceStart";
+	initiator: number;
+}
+
+type BCMAHiddenPayload = BCMAInvitePayload | BCMAInviteResponsePayload | BCMAForcePayload;
+
+function sendHiddenBCMAMessage(target: number, payload: BCMAHiddenPayload): void {
+	if (!ServerPlayerIsInChatRoom()) return;
+	ServerSend("ChatRoomChat", {
+		Content: "BCMA",
+		Type: "Hidden",
+		Target: target,
+		Dictionary: payload,
+	});
+}
+
+function ensureChatRoomMessageHook(): void {
+	if (chatRoomMessageHookInstalled) return;
+	const original = (globalThis as Record<string, any>).ChatRoomMessage;
+	if (typeof original !== "function") {
+		setTimeout(ensureChatRoomMessageHook, 500);
+		return;
+	}
+	(globalThis as Record<string, any>).ChatRoomMessage = function BCMAChatRoomMessage(this: unknown, data: any, ...rest: any[]) {
+		if (data?.Type === "Hidden" && data.Content === "BCMA" && typeof data.Dictionary === "object") {
+			handleBCMAHiddenMessage(data.Sender, data.Dictionary as BCMAHiddenPayload);
+			return;
+		}
+		return original.call(this, data, ...rest);
+	};
+	chatRoomMessageHookInstalled = true;
+}
+
+function handleBCMAHiddenMessage(sender: number, payload: BCMAHiddenPayload): void {
+	if (typeof payload?.action !== "string") return;
+	switch (payload.action) {
+		case "invite":
+			handleIncomingInvite(sender, payload);
+			break;
+		case "response":
+			handleInviteResponse(payload);
+			break;
+		case "forceStart":
+			handleForceStart(sender, payload);
+			break;
+		default:
+			break;
+	}
+}
+
+function handleIncomingInvite(sender: number, payload: BCMAInvitePayload): void {
+	if (payload.target !== Player?.MemberNumber) return;
+	const opponent = findChatRoomCharacter(sender);
+	const definition = GAME_LOOKUP.get(payload.gameId);
+	if (!definition || !opponent) {
+		sendHiddenBCMAMessage(sender, {
+			action: "response",
+			id: payload.id,
+			gameId: payload.gameId,
+			accepted: false,
+		});
+		return;
+	}
+	const opponentConfig = OPPONENT_REQUIRED_GAMES[payload.gameId];
+	showInvitePrompt(`${payload.initiatorName} wants to play ${payload.gameId}. Accept?`, () => {
+		if (opponentConfig) opponentConfig.prepareState(opponent);
+		launchMiniGame(definition);
+		sendHiddenBCMAMessage(sender, {
+			action: "response",
+			id: payload.id,
+			gameId: payload.gameId,
+			accepted: true,
+		});
+		closeInvitePrompt();
+	}, () => {
+		sendHiddenBCMAMessage(sender, {
+			action: "response",
+			id: payload.id,
+			gameId: payload.gameId,
+			accepted: false,
+		});
+		closeInvitePrompt();
+	});
+}
+
+function handleInviteResponse(payload: BCMAInviteResponsePayload): void {
+	if (!pendingInviteResponseIds.has(payload.id)) return;
+	pendingInviteResponseIds.delete(payload.id);
+	const info = inviteIdToOpponent.get(payload.id);
+	inviteIdToOpponent.delete(payload.id);
+	if (!info) return;
+	if (!payload.accepted) {
+		window.alert("BCMA: Invitation declined.");
+		return;
+	}
+	const definition = GAME_LOOKUP.get(info.gameId);
+	if (!definition) return;
+	const opponentConfig = OPPONENT_REQUIRED_GAMES[info.gameId];
+	if (opponentConfig) opponentConfig.prepareState(info.opponent);
+	launchMiniGame(definition);
+}
+
+function handleForceStart(sender: number, payload: BCMAForcePayload): void {
+	const opponentConfig = OPPONENT_REQUIRED_GAMES[payload.gameId];
+	const definition = GAME_LOOKUP.get(payload.gameId);
+	if (!opponentConfig || !definition) return;
+	const opponent = findChatRoomCharacter(sender);
+	if (!opponent) return;
+	opponentConfig.prepareState(opponent);
+	launchMiniGame(definition);
+}
+
+let invitePromptElement: HTMLDivElement | null = null;
+
+function showInvitePrompt(message: string, accept: () => void, decline: () => void): void {
+	closeInvitePrompt();
+	ensureInviteStyles();
+	invitePromptElement = document.createElement("div");
+	invitePromptElement.className = "bcma-opponent-overlay";
+	const dialog = document.createElement("div");
+	dialog.className = "bcma-opponent-dialog";
+	const text = document.createElement("p");
+	text.textContent = message;
+	dialog.appendChild(text);
+	const buttons = document.createElement("div");
+	buttons.className = "bcma-opponent-list";
+	const acceptBtn = document.createElement("button");
+	acceptBtn.type = "button";
+	acceptBtn.textContent = "Accept";
+	acceptBtn.onclick = accept;
+	const declineBtn = document.createElement("button");
+	declineBtn.type = "button";
+	declineBtn.textContent = "Decline";
+	declineBtn.onclick = decline;
+	buttons.appendChild(acceptBtn);
+	buttons.appendChild(declineBtn);
+	dialog.appendChild(buttons);
+	invitePromptElement.appendChild(dialog);
+	document.body.appendChild(invitePromptElement);
+}
+
+function closeInvitePrompt(): void {
+	if (invitePromptElement) {
+		invitePromptElement.remove();
+		invitePromptElement = null;
+	}
+}
+
+function ensureInviteStyles(): void {
+	if (inviteStylesInjected) return;
+	const style = document.createElement("style");
+	style.textContent = `
+.bcma-opponent-overlay {
+	position: fixed;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.6);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 5000;
+}
+.bcma-opponent-dialog {
+	background: #1b1b1f;
+	color: white;
+	border: 1px solid #fff;
+	padding: 20px;
+	max-width: 420px;
+	width: 90%;
+	text-align: center;
+	font-family: Arial, sans-serif;
+	box-shadow: 0 0 15px rgba(0, 0, 0, 0.5);
+}
+.bcma-opponent-list {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	margin-top: 15px;
+}
+.bcma-opponent-list button {
+	padding: 10px;
+	border: 1px solid #5a5a74;
+	background: #2d2d3a;
+	color: white;
+	cursor: pointer;
+}
+.bcma-opponent-list button:hover {
+	background: #38384d;
+}
+`;
+	document.head.appendChild(style);
+	inviteStylesInjected = true;
+}
+
+function findChatRoomCharacter(member: number): CharacterLike | null {
+	return (Array.isArray(ChatRoomCharacter) ? ChatRoomCharacter.find(c => c.MemberNumber === member) : null) ?? null;
+}
+
+function generateInviteId(): string {
+	return `${Player?.MemberNumber ?? "0"}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function isInChatRoom(): boolean {
