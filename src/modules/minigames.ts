@@ -380,6 +380,7 @@ let originalCharacterBuildDialog: CharacterBuildDialogFn | undefined;
 let originalDialogCanPerformCharacterAction: (() => boolean) | undefined;
 let chatRoomMessageHookInstalled = false;
 let inviteStylesInjected = false;
+let chatRoomAttemptLeaveHookInstalled = false;
 
 const OPPONENT_REQUIRED_GAMES: Record<string, OpponentGameConfig> = {
 	Tennis: {
@@ -749,6 +750,11 @@ function startRoomTravel(id: string): boolean {
 }
 
 function startRoomTravelWithTarget(id: string): boolean {
+	const opponent = CurrentCharacter;
+	return startRoomTravelWithCharacter(id, opponent ?? undefined);
+}
+
+function startRoomTravelWithCharacter(id: string, opponent: CharacterLike | undefined): boolean {
 	const definition = ROOM_LOOKUP.get(id);
 	if (!definition) {
 		console.warn("[BCMA] Unknown room requested", id);
@@ -758,25 +764,16 @@ function startRoomTravelWithTarget(id: string): boolean {
 		window.alert("BCMA: You cannot travel there right now.");
 		return false;
 	}
-	const opponent = CurrentCharacter;
-	if (!opponent || typeof opponent.IsOnline !== "function" || !opponent.IsOnline()) {
-		console.warn("[BCMA] No valid opponent selected for room invite");
-		return false;
+	if (!opponent || opponent === Player || typeof opponent.IsOnline !== "function" || !opponent.IsOnline()) {
+		enterRoom(definition);
+		return true;
 	}
 	if (typeof opponent.MemberNumber !== "number") {
 		console.warn("[BCMA] Target is missing a member number");
 		return false;
 	}
 	if (opponent.IsOwnedByPlayer?.()) {
-		sendHiddenBCMAMessage(opponent.MemberNumber, {
-			action: "roomForce",
-			roomId: id,
-			initiator: Player?.MemberNumber ?? -1,
-		});
-		enterRoom(definition, {
-			hostMember: Player?.MemberNumber,
-			guestMember: opponent.MemberNumber,
-		});
+		forceRoomTravel(definition, id, opponent);
 		return true;
 	}
 	const inviteId = generateInviteId();
@@ -791,6 +788,22 @@ function startRoomTravelWithTarget(id: string): boolean {
 		initiatorName: getCharacterDisplayName(Player),
 	});
 	window.alert(`BCMA: Invitation sent to ${getCharacterDisplayName(opponent)}.`);
+	return true;
+}
+
+function forceRoomTravel(definition: RoomDefinition, roomId: string, opponent: CharacterLike): boolean {
+	if (typeof opponent.MemberNumber !== "number") {
+		return false;
+	}
+	sendHiddenBCMAMessage(opponent.MemberNumber, {
+		action: "roomForce",
+		roomId,
+		initiator: Player?.MemberNumber ?? -1,
+	});
+	enterRoom(definition, {
+		hostMember: Player?.MemberNumber,
+		guestMember: opponent.MemberNumber,
+	});
 	return true;
 }
 
@@ -1186,6 +1199,47 @@ function ensureInviteStyles(): void {
 `;
 	document.head.appendChild(style);
 	inviteStylesInjected = true;
+}
+
+function ensureChatRoomAttemptLeaveHook(attempt = 0): void {
+	if (chatRoomAttemptLeaveHookInstalled) return;
+	const hooked = hookGameFunction("ChatRoomAttemptLeave", 0, (args, next) => {
+		if (handleAutoPrivateEscort()) return;
+		return next(args);
+	});
+	if (hooked) {
+		chatRoomAttemptLeaveHookInstalled = true;
+		return;
+	}
+	if (attempt >= 10) {
+		console.warn("[BCMA] Failed to hook ChatRoomAttemptLeave via ModSDK after multiple attempts");
+		return;
+	}
+	setTimeout(() => ensureChatRoomAttemptLeaveHook(attempt + 1), 1000);
+}
+
+function handleAutoPrivateEscort(): boolean {
+	if (!isInChatRoom() || isPrivateRoomActive()) return false;
+	const room = ROOM_LOOKUP.get("Private");
+	if (!room) return false;
+	if (!canPlayerTravel() || !meetsRoomRequirements(room, Player)) return false;
+	const leashedOpponents = getLeashedOpponents();
+	if (leashedOpponents.length !== 1) return false;
+	const opponent = leashedOpponents[0];
+	if (!opponent) return false;
+	return forceRoomTravel(room, room.id, opponent);
+}
+
+function getLeashedOpponents(): CharacterLike[] {
+	const globalObj = globalThis as Record<string, any>;
+	const leashList = Array.isArray(globalObj.ChatRoomLeashList) ? (globalObj.ChatRoomLeashList as number[]) : [];
+	const result: CharacterLike[] = [];
+	for (const member of leashList) {
+		if (typeof member !== "number") continue;
+		const opponent = findChatRoomCharacter(member);
+		if (opponent) result.push(opponent);
+	}
+	return result;
 }
 
 function findChatRoomCharacter(member: number): CharacterLike | null {
