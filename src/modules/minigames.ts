@@ -55,6 +55,18 @@ declare global {
 	function CharacterNickname(character: CharacterLike): string;
 	function CommonGetScreen(): string;
 	function ServerSend(Message: string, Data: any): void;
+	function CharacterAppearanceStringify(character: CharacterLike): string;
+	function CharacterAppearanceRestore(character: CharacterLike, data: string): void;
+	function CharacterLoadSimple(id: string): CharacterLike;
+}
+
+interface LeashedCharacterSnapshot {
+	memberNumber: number;
+	name?: string;
+	nickname?: string;
+	appearance?: string;
+	labelColor?: string;
+	capturedAt: number;
 }
 
 const MINI_GAMES: readonly MiniGameDefinition[] = Object.freeze([
@@ -337,9 +349,16 @@ interface OpponentGameConfig {
 	initSync?: (opponent: CharacterLike, matchId: string) => void;
 }
 
+interface RoomCharacterOverrideSet {
+	host?: CharacterLike | null;
+	guest?: CharacterLike | null;
+}
+
 interface RoomContext {
 	hostMember?: number;
 	guestMember?: number;
+	simulationOnly?: boolean;
+	overrides?: RoomCharacterOverrideSet;
 }
 
 const SELF_MAIN_STAGE = "100";
@@ -371,6 +390,7 @@ interface SimulatedRoomSessionState {
 	host: number;
 	guest: number;
 	opponent?: number;
+	notifyOpponent: boolean;
 }
 let privateRoomSession: SimulatedRoomSessionState | null = null;
 
@@ -381,6 +401,11 @@ let originalDialogCanPerformCharacterAction: (() => boolean) | undefined;
 let chatRoomMessageHookInstalled = false;
 let inviteStylesInjected = false;
 let chatRoomAttemptLeaveHookInstalled = false;
+let leashSnapshotHookInstalled = false;
+let chatSearchHooksInstalled = false;
+let chatSearchButtonStylesInjected = false;
+let chatSearchButtonElement: HTMLButtonElement | null = null;
+let lastLeashSnapshot: LeashedCharacterSnapshot | null = null;
 
 const OPPONENT_REQUIRED_GAMES: Record<string, OpponentGameConfig> = {
 	Tennis: {
@@ -402,6 +427,9 @@ export function registerMiniGameMenu(): void {
 	tryAugmentExistingDialogs();
 	ensureChatRoomMessageHook();
 	ensureTennisRunHook();
+	ensureChatRoomAttemptLeaveHook();
+	ensureLeashSnapshotHooks();
+	ensureChatSearchHooks();
 }
 
 function installGlobalHelpers(): void {
@@ -795,6 +823,7 @@ function forceRoomTravel(definition: RoomDefinition, roomId: string, opponent: C
 	if (typeof opponent.MemberNumber !== "number") {
 		return false;
 	}
+	updateLeashSnapshot(opponent);
 	sendHiddenBCMAMessage(opponent.MemberNumber, {
 		action: "roomForce",
 		roomId,
@@ -1227,6 +1256,7 @@ function handleAutoPrivateEscort(): boolean {
 	if (leashedOpponents.length !== 1) return false;
 	const opponent = leashedOpponents[0];
 	if (!opponent) return false;
+	updateLeashSnapshot(opponent);
 	return forceRoomTravel(room, room.id, opponent);
 }
 
@@ -1259,6 +1289,165 @@ function isInChatRoom(): boolean {
 		return typeof ServerPlayerIsInChatRoom === "function" && ServerPlayerIsInChatRoom();
 	} catch {
 		return false;
+	}
+}
+
+function ensureLeashSnapshotHooks(attempt = 0): void {
+	if (leashSnapshotHookInstalled) return;
+	const hooked = hookGameFunction("ChatRoomHoldLeash", 0, (args, next) => {
+		const result = next(args);
+		updateLeashSnapshot(CurrentCharacter);
+		return result;
+	});
+	if (hooked) {
+		leashSnapshotHookInstalled = true;
+		return;
+	}
+	if (attempt >= 10) {
+		console.warn("[BCMA] Failed to hook ChatRoomHoldLeash via ModSDK after multiple attempts");
+		return;
+	}
+	setTimeout(() => ensureLeashSnapshotHooks(attempt + 1), 1000);
+}
+
+function updateLeashSnapshot(character: CharacterLike | undefined | null): void {
+	if (!character || typeof character.MemberNumber !== "number") return;
+	let appearance: string | undefined;
+	if (typeof CharacterAppearanceStringify === "function") {
+		try {
+			appearance = CharacterAppearanceStringify(character);
+		} catch (error) {
+			console.warn("[BCMA] Failed to capture leash snapshot", error);
+		}
+	}
+	lastLeashSnapshot = {
+		memberNumber: character.MemberNumber,
+		name: character.Name,
+		nickname: character.Nickname,
+		labelColor: (character as Record<string, unknown>).LabelColor as string | undefined,
+		appearance,
+		capturedAt: Date.now(),
+	};
+}
+
+function ensureChatSearchHooks(attempt = 0): void {
+	if (chatSearchHooksInstalled) return;
+	const loadHooked = hookGameFunction("ChatSearchLoad", 0, (args, next) => {
+		const result = next(args);
+		setTimeout(showChatSearchEscortButton, 0);
+		return result;
+	});
+	const unloadHooked = hookGameFunction("ChatSearchUnload", 0, (args, next) => {
+		hideChatSearchEscortButton();
+		return next(args);
+	});
+	if (loadHooked && unloadHooked) {
+		chatSearchHooksInstalled = true;
+		return;
+	}
+	if (attempt >= 10) {
+		console.warn("[BCMA] Failed to hook ChatSearch load/unload via ModSDK after multiple attempts");
+		return;
+	}
+	setTimeout(() => ensureChatSearchHooks(attempt + 1), 1000);
+}
+
+function showChatSearchEscortButton(): void {
+	if (CurrentScreen !== "ChatSearch") return;
+	if (!chatSearchButtonStylesInjected) {
+		const style = document.createElement("style");
+		style.textContent = `
+.bcma-chatsearch-escort {
+	position: fixed;
+	top: 35px;
+	right: 260px;
+	width: 95px;
+	height: 95px;
+	background: rgba(10, 10, 24, 0.9);
+	border: 2px solid #fff;
+	color: #fff;
+	font-size: 12px;
+	font-family: Arial, sans-serif;
+	line-height: 1.2;
+	text-align: center;
+	padding: 8px;
+	z-index: 4200;
+	cursor: pointer;
+}
+.bcma-chatsearch-escort:hover {
+	background: rgba(255, 255, 255, 0.15);
+}`;
+		document.head.appendChild(style);
+		chatSearchButtonStylesInjected = true;
+	}
+	if (!chatSearchButtonElement) {
+		chatSearchButtonElement = document.createElement("button");
+		chatSearchButtonElement.type = "button";
+		chatSearchButtonElement.className = "bcma-chatsearch-escort";
+		chatSearchButtonElement.textContent = "BCMA\nPrivate Room";
+		chatSearchButtonElement.onclick = () => openSimulatedPrivateRoomFromSnapshot();
+		document.body.appendChild(chatSearchButtonElement);
+	}
+	chatSearchButtonElement.style.display = "block";
+}
+
+function hideChatSearchEscortButton(): void {
+	if (chatSearchButtonElement) {
+		chatSearchButtonElement.style.display = "none";
+	}
+}
+
+function openSimulatedPrivateRoomFromSnapshot(): void {
+	const snapshot = lastLeashSnapshot;
+	if (!snapshot) {
+		window.alert("BCMA: No captured leash snapshot is available yet.");
+		return;
+	}
+	const room = ROOM_LOOKUP.get("Private");
+	if (!room) {
+		window.alert("BCMA: Private room definition not available.");
+		return;
+	}
+	if (!canPlayerTravel()) {
+		window.alert("BCMA: You cannot travel to your private room right now.");
+		return;
+	}
+	if (typeof snapshot.memberNumber !== "number") {
+		window.alert("BCMA: The captured leash snapshot is missing a member number.");
+		return;
+	}
+	const guestCharacter = buildCharacterFromSnapshot(snapshot);
+	if (!guestCharacter) {
+		window.alert("BCMA: Unable to rebuild the captured player appearance.");
+		return;
+	}
+	const hostMember = Player?.MemberNumber;
+	if (typeof hostMember !== "number") {
+		window.alert("BCMA: Player information is not available.");
+		return;
+	}
+	openSimulatedPrivateRoom(room, {
+		hostMember,
+		guestMember: snapshot.memberNumber,
+		simulationOnly: true,
+		overrides: { guest: guestCharacter },
+	});
+}
+
+function buildCharacterFromSnapshot(snapshot: LeashedCharacterSnapshot): CharacterLike | null {
+	if (typeof CharacterLoadSimple !== "function" || typeof CharacterAppearanceRestore !== "function") return null;
+	try {
+		const identifier = `BCMA-Leash-${snapshot.memberNumber ?? Date.now()}`;
+		const simple = CharacterLoadSimple(identifier);
+		if (snapshot.appearance) {
+			CharacterAppearanceRestore(simple, snapshot.appearance);
+		}
+		simple.Name = snapshot.name ?? simple.Name;
+		simple.Nickname = snapshot.nickname ?? snapshot.name ?? simple.Nickname;
+		return simple;
+	} catch (error) {
+		console.warn("[BCMA] Failed to reconstruct leash snapshot character", error);
+		return null;
 	}
 }
 
@@ -1375,7 +1564,8 @@ function enterRoom(room: RoomDefinition, context?: RoomContext): void {
 }
 
 function openSimulatedPrivateRoom(room: RoomDefinition, context?: RoomContext): void {
-	closeSimulatedRoom(true);
+	const simulationOnly = Boolean(context?.simulationOnly);
+	closeSimulatedRoom(!simulationOnly);
 	const host = context?.hostMember ?? Player?.MemberNumber;
 	const guest = context?.guestMember ?? Player?.MemberNumber;
 	if (typeof host !== "number" || typeof guest !== "number") {
@@ -1383,15 +1573,18 @@ function openSimulatedPrivateRoom(room: RoomDefinition, context?: RoomContext): 
 		return;
 	}
 	const localMember = Player?.MemberNumber;
-	const opponent = localMember === host ? guest : host;
+	const opponent = simulationOnly ? undefined : localMember === host ? guest : host;
 	privateRoomSession = {
 		roomId: room.id,
 		host,
 		guest,
 		opponent: opponent === localMember ? undefined : opponent,
+		notifyOpponent: !simulationOnly,
 	};
-	openPrivateRoomSimulation(room.id, host, guest, () => {
-		clearPrivateRoomSession(true);
+	openPrivateRoomSimulation(room.id, host, guest, {
+		onClose: () => clearPrivateRoomSession(true),
+		overrides: context?.overrides,
+		simulationOnly,
 	});
 	if (Player?.MemberNumber === host) {
 		void collectPrivateNpcSnapshots().then((npcs) => {
@@ -1405,9 +1598,9 @@ function openSimulatedPrivateRoom(room: RoomDefinition, context?: RoomContext): 
 
 function clearPrivateRoomSession(notifyOpponent: boolean): void {
 	if (!privateRoomSession) return;
-	const { opponent, roomId } = privateRoomSession;
+	const { opponent, roomId, notifyOpponent: sessionNotify } = privateRoomSession;
 	privateRoomSession = null;
-	if (notifyOpponent && opponent) {
+	if (notifyOpponent && sessionNotify && opponent) {
 		sendHiddenBCMAMessage(opponent, {
 			action: "roomSimClose",
 			roomId,
@@ -1417,6 +1610,7 @@ function clearPrivateRoomSession(notifyOpponent: boolean): void {
 
 function broadcastNpcSnapshots(npcs: RoomNpcSnapshotData[]): void {
 	if (!privateRoomSession) return;
+	if (!privateRoomSession.notifyOpponent) return;
 	if (!npcs.length) return;
 	const target = privateRoomSession.guest;
 	if (typeof target !== "number") return;
@@ -1431,7 +1625,7 @@ function broadcastNpcSnapshots(npcs: RoomNpcSnapshotData[]): void {
 
 function closeSimulatedRoom(notifyOpponent: boolean): void {
 	if (privateRoomSession) {
-		clearPrivateRoomSession(notifyOpponent);
+		clearPrivateRoomSession(notifyOpponent && privateRoomSession.notifyOpponent);
 	}
 	closePrivateRoomSimulation(false);
 }

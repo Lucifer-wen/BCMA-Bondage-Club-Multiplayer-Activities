@@ -27,6 +27,17 @@ interface SimulatedRoomSession {
 	guest: number;
 }
 
+interface RoomCharacterOverrides {
+	host?: CharacterLike | null;
+	guest?: CharacterLike | null;
+}
+
+export interface PrivateRoomSimulationOptions {
+	onClose?: () => void;
+	overrides?: RoomCharacterOverrides;
+	simulationOnly?: boolean;
+}
+
 let overlayElement: HTMLDivElement | null = null;
 let contentElement: HTMLDivElement | null = null;
 let hostContainer: HTMLDivElement | null = null;
@@ -39,6 +50,8 @@ let npcNameElement: HTMLSpanElement | null = null;
 let localNpcSnapshots: RenderableNpc[] = [];
 let remoteNpcSnapshots: RenderableNpc[] = [];
 let npcIndex = 0;
+let sessionOverrides: RoomCharacterOverrides | null = null;
+let sessionSimulationOnly = false;
 
 interface RenderableNpc {
 	id: string;
@@ -52,8 +65,10 @@ export function registerPrivateRoomModule(): void {
 	// currently nothing to initialize, but kept for parity with other modules
 }
 
-export function openPrivateRoomSimulation(roomId: string, host: number, guest: number, onClose?: () => void): void {
-	closeCallback = onClose ?? null;
+export function openPrivateRoomSimulation(roomId: string, host: number, guest: number, options?: PrivateRoomSimulationOptions): void {
+	closeCallback = options?.onClose ?? null;
+	sessionOverrides = options?.overrides ?? null;
+	sessionSimulationOnly = Boolean(options?.simulationOnly);
 	session = { roomId, host, guest };
 	ensureOverlay();
 	renderCharacters();
@@ -82,6 +97,8 @@ export function closePrivateRoomSimulation(triggerCallback = true): void {
 	localNpcSnapshots = [];
 	remoteNpcSnapshots = [];
 	npcIndex = 0;
+	sessionOverrides = null;
+	sessionSimulationOnly = false;
 }
 
 export function isPrivateRoomActive(): boolean {
@@ -399,6 +416,10 @@ function getCharacterDisplayName(character?: CharacterLike | null): string {
 
 function findCharacter(member: number): CharacterLike | null {
 	if (typeof member !== "number") return null;
+	if (sessionOverrides) {
+		if (session && member === session.host && sessionOverrides.host) return sessionOverrides.host;
+		if (session && member === session.guest && sessionOverrides.guest) return sessionOverrides.guest;
+	}
 	if (Player?.MemberNumber === member) return Player ?? null;
 	if (Array.isArray(ChatRoomCharacter)) {
 		const match = ChatRoomCharacter.find(c => c.MemberNumber === member);
