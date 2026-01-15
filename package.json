@@ -12,6 +12,7 @@
     "test": "jest"
   },
   "dependencies": {
+    "bondage-club-mod-sdk": "^1.2.0",
     "lodash-es": "^4.17.21"
   },
   "devDependencies": {

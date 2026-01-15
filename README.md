@@ -47,6 +47,7 @@ Jedes Modul exportiert eine `register()`-Funktion, die im Einstiegspunkt aktivie
 - Erweitert das gleiche Menü um Clubräume wie Café, Arcade, Stallungen usw., sodass ihr synchron per `CommonSetScreen` in dieselbe Umgebung wechseln könnt.
 - Synchronisiert beim Tennis-Minispiel die Punkte zwischen beiden Clients, indem BCMA nach jeder Änderung diskrete Score-Pakete verschickt.
 - Bietet einen simulierten Privatraum: Statt den echten Einzelspieler-Screen zu öffnen bleibt ihr im Chat, BCMA blendet ein Shared-Overlay ein und zeigt beide Avatare (plus Exit-Dialog) synchron an.
+- Lädt und überträgt die NPCs des Gastgeber-Privatraums (inkl. Aussehen) an eingeladene Spieler, sodass beide dieselben Begleiter im Overlay sehen können.
 
 ## Build & Release
 

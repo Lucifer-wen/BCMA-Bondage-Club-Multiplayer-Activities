@@ -11,7 +11,9 @@ interface DialogLine {
 }
 
 import type { CharacterLike } from "../types/character";
-import { getActivePrivateRoomId, isPrivateRoomActive, openPrivateRoomSimulation, closePrivateRoomSimulation } from "./privateRoom";
+import { applyRemoteNpcSnapshots, collectPrivateNpcSnapshots, getActivePrivateRoomId, isPrivateRoomActive, openPrivateRoomSimulation, closePrivateRoomSimulation } from "./privateRoom";
+import type { RoomNpcSnapshotData } from "./privateRoom";
+import { hookGameFunction } from "../core/modsdk";
 
 interface MiniGameDefinition {
 	id: string;
@@ -869,6 +871,12 @@ interface BCMARoomForcePayload extends BCMAInvitePayloadBase {
 	roomId: string;
 	initiator: number;
 }
+interface BCMARoomNpcSyncPayload extends BCMAInvitePayloadBase {
+	action: "roomNpcSync";
+	roomId: string;
+	owner: number;
+	npcs: RoomNpcSnapshotData[];
+}
 interface BCMARoomSimClosePayload extends BCMAInvitePayloadBase {
 	action: "roomSimClose";
 	roomId: string;
@@ -882,6 +890,7 @@ type BCMAHiddenPayload =
 	| BCMARoomInvitePayload
 	| BCMARoomResponsePayload
 	| BCMARoomForcePayload
+	| BCMARoomNpcSyncPayload
 	| BCMARoomSimClosePayload;
 
 function sendHiddenBCMAMessage(target: number, payload: BCMAHiddenPayload): void {
@@ -894,21 +903,25 @@ function sendHiddenBCMAMessage(target: number, payload: BCMAHiddenPayload): void
 	});
 }
 
-function ensureChatRoomMessageHook(): void {
+function ensureChatRoomMessageHook(attempt = 0): void {
 	if (chatRoomMessageHookInstalled) return;
-	const original = (globalThis as Record<string, any>).ChatRoomMessage;
-	if (typeof original !== "function") {
-		setTimeout(ensureChatRoomMessageHook, 500);
-		return;
-	}
-	(globalThis as Record<string, any>).ChatRoomMessage = function BCMAChatRoomMessage(this: unknown, data: any, ...rest: any[]) {
+	const hooked = hookGameFunction("ChatRoomMessage", 0, (args, next) => {
+		const [data] = args as [any, ...any[]];
 		if (data?.Type === "Hidden" && data.Content === "BCMA" && typeof data.Dictionary === "object") {
 			handleBCMAHiddenMessage(data.Sender, data.Dictionary as BCMAHiddenPayload);
 			return;
 		}
-		return original.call(this, data, ...rest);
-	};
-	chatRoomMessageHookInstalled = true;
+		return next(args);
+	});
+	if (hooked) {
+		chatRoomMessageHookInstalled = true;
+		return;
+	}
+	if (attempt >= 10) {
+		console.warn("[BCMA] Failed to hook ChatRoomMessage via ModSDK after multiple attempts");
+		return;
+	}
+	setTimeout(() => ensureChatRoomMessageHook(attempt + 1), 1000);
 }
 
 function handleBCMAHiddenMessage(sender: number, payload: BCMAHiddenPayload): void {
@@ -934,6 +947,9 @@ function handleBCMAHiddenMessage(sender: number, payload: BCMAHiddenPayload): vo
 			break;
 		case "roomForce":
 			handleRoomForce(sender, payload);
+			break;
+		case "roomNpcSync":
+			handleRoomNpcSync(payload);
 			break;
 		case "roomSimClose":
 			handleRoomSimClose(payload);
@@ -1079,6 +1095,12 @@ function handleRoomForce(sender: number, payload: BCMARoomForcePayload): void {
 	});
 }
 
+function handleRoomNpcSync(payload: BCMARoomNpcSyncPayload): void {
+	if (!privateRoomSession || privateRoomSession.roomId !== payload.roomId) return;
+	if (privateRoomSession.host === Player?.MemberNumber) return;
+	applyRemoteNpcSnapshots(payload.npcs);
+}
+
 function handleRoomSimClose(payload: BCMARoomSimClosePayload): void {
 	if (!privateRoomSession || privateRoomSession.roomId !== payload.roomId) return;
 	closeSimulatedRoom(false);
@@ -1186,21 +1208,23 @@ function isInChatRoom(): boolean {
 	}
 }
 
-function ensureTennisRunHook(): void {
+function ensureTennisRunHook(attempt = 0): void {
 	if (tennisHookInstalled)
 		return;
-	const globalObj = globalThis as Record<string, any>;
-	const original = globalObj.TennisRun;
-	if (typeof original !== "function") {
-		setTimeout(ensureTennisRunHook, 500);
-		return;
-	}
-	globalObj.TennisRun = function BCMATennisRun(this: unknown, ...args: any[]) {
-		const result = original.apply(this, args);
+	const hooked = hookGameFunction("TennisRun", 0, (args, next) => {
+		const result = next(args);
 		recordTennisScore();
 		return result;
-	};
-	tennisHookInstalled = true;
+	});
+	if (hooked) {
+		tennisHookInstalled = true;
+		return;
+	}
+	if (attempt >= 10) {
+		console.warn("[BCMA] Failed to hook TennisRun via ModSDK after multiple attempts");
+		return;
+	}
+	setTimeout(() => ensureTennisRunHook(attempt + 1), 1000);
 }
 
 function initTennisSync(opponent: CharacterLike, matchId: string): void {
@@ -1315,6 +1339,14 @@ function openSimulatedPrivateRoom(room: RoomDefinition, context?: RoomContext): 
 	openPrivateRoomSimulation(room.id, host, guest, () => {
 		clearPrivateRoomSession(true);
 	});
+	if (Player?.MemberNumber === host) {
+		void collectPrivateNpcSnapshots().then((npcs) => {
+			if (!privateRoomSession || privateRoomSession.host !== Player?.MemberNumber) return;
+			broadcastNpcSnapshots(npcs);
+		});
+	} else {
+		applyRemoteNpcSnapshots([]);
+	}
 }
 
 function clearPrivateRoomSession(notifyOpponent: boolean): void {
@@ -1327,6 +1359,20 @@ function clearPrivateRoomSession(notifyOpponent: boolean): void {
 			roomId,
 		});
 	}
+}
+
+function broadcastNpcSnapshots(npcs: RoomNpcSnapshotData[]): void {
+	if (!privateRoomSession) return;
+	if (!npcs.length) return;
+	const target = privateRoomSession.guest;
+	if (typeof target !== "number") return;
+	if (target === Player?.MemberNumber) return;
+	sendHiddenBCMAMessage(target, {
+		action: "roomNpcSync",
+		roomId: privateRoomSession.roomId,
+		owner: Player?.MemberNumber ?? -1,
+		npcs,
+	});
 }
 
 function closeSimulatedRoom(notifyOpponent: boolean): void {
