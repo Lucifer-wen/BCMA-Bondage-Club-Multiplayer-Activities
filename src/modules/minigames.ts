@@ -10,20 +10,8 @@ interface DialogLine {
 	Trait: string | null;
 }
 
-interface CharacterLike {
-	Dialog?: DialogLine[];
-	IsPlayer?: () => boolean;
-	IsOnline?: () => boolean;
-	IsOwnedByPlayer?: () => boolean;
-	CanWalk?: () => boolean;
-	CanTalk?: () => boolean;
-	CanChangeOwnClothes?: () => boolean;
-	IsRestrained?: () => boolean;
-	Name?: string;
-	Nickname?: string;
-	MemberNumber?: number;
-	[key: string | symbol]: unknown;
-}
+import type { CharacterLike } from "../types/character";
+import { getActivePrivateRoomId, isPrivateRoomActive, openPrivateRoomSimulation, closePrivateRoomSimulation } from "./privateRoom";
 
 interface MiniGameDefinition {
 	id: string;
@@ -43,6 +31,7 @@ interface RoomDefinition {
 	descriptionSelf: string;
 	labelTarget: string;
 	descriptionTarget: string;
+	mode?: "native" | "privateSimulation";
 	requiresCanWalk?: boolean;
 	requiresCanChange?: boolean;
 	requiresCanTalk?: boolean;
@@ -236,6 +225,7 @@ const ROOM_DEFINITIONS: readonly RoomDefinition[] = Object.freeze([
 		name: "your Private Room",
 		module: "Room",
 		screen: "Private",
+		mode: "privateSimulation",
 		labelSelf: "(Go to your private room.)",
 		descriptionSelf: "(Head over to your own private space.)",
 		labelTarget: "(Invite DialogCharacterObject to your private room.)",
@@ -345,6 +335,11 @@ interface OpponentGameConfig {
 	initSync?: (opponent: CharacterLike, matchId: string) => void;
 }
 
+interface RoomContext {
+	hostMember?: number;
+	guestMember?: number;
+}
+
 const SELF_MAIN_STAGE = "100";
 const SELF_SUBMENU_STAGE = "9100";
 const TARGET_MAIN_STAGE = "40";
@@ -369,6 +364,13 @@ interface TennisSyncState {
 let tennisSync: TennisSyncState | null = null;
 let suppressTennisBroadcast = false;
 let tennisHookInstalled = false;
+interface SimulatedRoomSessionState {
+	roomId: string;
+	host: number;
+	guest: number;
+	opponent?: number;
+}
+let privateRoomSession: SimulatedRoomSessionState | null = null;
 
 type CharacterBuildDialogFn = (character: CharacterLike, csv: string[][], functionPrefix: string, reload?: boolean) => void;
 
@@ -737,7 +739,10 @@ function startRoomTravel(id: string): boolean {
 		window.alert("BCMA: You cannot travel there right now.");
 		return false;
 	}
-	enterRoom(definition);
+	enterRoom(definition, {
+		hostMember: Player?.MemberNumber,
+		guestMember: Player?.MemberNumber,
+	});
 	return true;
 }
 
@@ -766,7 +771,10 @@ function startRoomTravelWithTarget(id: string): boolean {
 			roomId: id,
 			initiator: Player?.MemberNumber ?? -1,
 		});
-		enterRoom(definition);
+		enterRoom(definition, {
+			hostMember: Player?.MemberNumber,
+			guestMember: opponent.MemberNumber,
+		});
 		return true;
 	}
 	const inviteId = generateInviteId();
@@ -861,6 +869,10 @@ interface BCMARoomForcePayload extends BCMAInvitePayloadBase {
 	roomId: string;
 	initiator: number;
 }
+interface BCMARoomSimClosePayload extends BCMAInvitePayloadBase {
+	action: "roomSimClose";
+	roomId: string;
+}
 
 type BCMAHiddenPayload =
 	| BCMAInvitePayload
@@ -869,7 +881,8 @@ type BCMAHiddenPayload =
 	| BCMATennisScorePayload
 	| BCMARoomInvitePayload
 	| BCMARoomResponsePayload
-	| BCMARoomForcePayload;
+	| BCMARoomForcePayload
+	| BCMARoomSimClosePayload;
 
 function sendHiddenBCMAMessage(target: number, payload: BCMAHiddenPayload): void {
 	if (!ServerPlayerIsInChatRoom()) return;
@@ -921,6 +934,9 @@ function handleBCMAHiddenMessage(sender: number, payload: BCMAHiddenPayload): vo
 			break;
 		case "roomForce":
 			handleRoomForce(sender, payload);
+			break;
+		case "roomSimClose":
+			handleRoomSimClose(payload);
 			break;
 		default:
 			break;
@@ -1012,7 +1028,10 @@ function handleRoomInvite(sender: number, payload: BCMARoomInvitePayload): void 
 		return;
 	}
 	showInvitePrompt(`${payload.initiatorName} wants to bring you to ${room.name}. Accept?`, () => {
-		enterRoom(room);
+		enterRoom(room, {
+			hostMember: payload.initiator,
+			guestMember: payload.target,
+		});
 		sendHiddenBCMAMessage(sender, {
 			action: "roomResponse",
 			id: payload.id,
@@ -1043,14 +1062,27 @@ function handleRoomResponse(payload: BCMARoomResponsePayload): void {
 	}
 	const room = ROOM_LOOKUP.get(info.roomId);
 	if (!room || !meetsRoomRequirements(room, Player)) return;
-	enterRoom(room);
+	const guestMember = info.opponent.MemberNumber ?? Player?.MemberNumber;
+	enterRoom(room, {
+		hostMember: Player?.MemberNumber,
+		guestMember,
+	});
 }
 
 function handleRoomForce(sender: number, payload: BCMARoomForcePayload): void {
 	const room = ROOM_LOOKUP.get(payload.roomId);
 	if (!room || !meetsRoomRequirements(room, Player)) return;
 	if (!findChatRoomCharacter(sender)) return;
-	enterRoom(room);
+	enterRoom(room, {
+		hostMember: sender,
+		guestMember: Player?.MemberNumber,
+	});
+}
+
+function handleRoomSimClose(payload: BCMARoomSimClosePayload): void {
+	if (!privateRoomSession || privateRoomSession.roomId !== payload.roomId) return;
+	closeSimulatedRoom(false);
+	window.alert("BCMA: The other player left the private room.");
 }
 
 let invitePromptElement: HTMLDivElement | null = null;
@@ -1247,7 +1279,12 @@ function meetsRoomRequirements(room: RoomDefinition, actor?: CharacterLike | nul
 	return true;
 }
 
-function enterRoom(room: RoomDefinition): void {
+function enterRoom(room: RoomDefinition, context?: RoomContext): void {
+	if (room.mode === "privateSimulation") {
+		openSimulatedPrivateRoom(room, context);
+		return;
+	}
+	closeSimulatedRoom(true);
 	if (typeof CommonSetScreen !== "function") {
 		console.warn("[BCMA] Cannot move to room, CommonSetScreen unavailable");
 		return;
@@ -1257,6 +1294,46 @@ function enterRoom(room: RoomDefinition): void {
 	} catch (error) {
 		console.error("[BCMA] Failed to move to room", room.id, error);
 	}
+}
+
+function openSimulatedPrivateRoom(room: RoomDefinition, context?: RoomContext): void {
+	closeSimulatedRoom(true);
+	const host = context?.hostMember ?? Player?.MemberNumber;
+	const guest = context?.guestMember ?? Player?.MemberNumber;
+	if (typeof host !== "number" || typeof guest !== "number") {
+		console.warn("[BCMA] Missing host/guest information for simulated room", room.id);
+		return;
+	}
+	const localMember = Player?.MemberNumber;
+	const opponent = localMember === host ? guest : host;
+	privateRoomSession = {
+		roomId: room.id,
+		host,
+		guest,
+		opponent: opponent === localMember ? undefined : opponent,
+	};
+	openPrivateRoomSimulation(room.id, host, guest, () => {
+		clearPrivateRoomSession(true);
+	});
+}
+
+function clearPrivateRoomSession(notifyOpponent: boolean): void {
+	if (!privateRoomSession) return;
+	const { opponent, roomId } = privateRoomSession;
+	privateRoomSession = null;
+	if (notifyOpponent && opponent) {
+		sendHiddenBCMAMessage(opponent, {
+			action: "roomSimClose",
+			roomId,
+		});
+	}
+}
+
+function closeSimulatedRoom(notifyOpponent: boolean): void {
+	if (privateRoomSession) {
+		clearPrivateRoomSession(notifyOpponent);
+	}
+	closePrivateRoomSimulation(false);
 }
 
 function canPlayerTravel(): boolean {
