@@ -41,6 +41,12 @@ Im Ordner `src/modules` kannst du Module ähnlich wie in BCX anlegen, z. B.:
 
 Jedes Modul exportiert eine `register()`-Funktion, die im Einstiegspunkt aktiviert wird.
 
+## Aktuelle Funktionen
+
+- Fügt dem Charakter-Aktionsmenü eigene BCMA-Einträge hinzu, um Minispiele lokal zu starten oder andere Spieler via Hidden-Beep-Protokoll einzuladen (inklusive Force-Start, falls dein Ziel dir gehört).
+- Erweitert das gleiche Menü um Clubräume wie Café, Arcade, Stallungen usw., sodass ihr synchron per `CommonSetScreen` in dieselbe Umgebung wechseln könnt.
+- Synchronisiert beim Tennis-Minispiel die Punkte zwischen beiden Clients, indem BCMA nach jeder Änderung diskrete Score-Pakete verschickt.
+
 ## Build & Release
 
 ```

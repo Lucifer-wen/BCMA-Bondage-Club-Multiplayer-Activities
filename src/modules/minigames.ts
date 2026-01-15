@@ -15,6 +15,10 @@ interface CharacterLike {
 	IsPlayer?: () => boolean;
 	IsOnline?: () => boolean;
 	IsOwnedByPlayer?: () => boolean;
+	CanWalk?: () => boolean;
+	CanTalk?: () => boolean;
+	CanChangeOwnClothes?: () => boolean;
+	IsRestrained?: () => boolean;
 	Name?: string;
 	Nickname?: string;
 	MemberNumber?: number;
@@ -28,6 +32,21 @@ interface MiniGameDefinition {
 	descriptionSelf: string;
 	labelTarget: string;
 	descriptionTarget: string;
+}
+
+interface RoomDefinition {
+	id: string;
+	name: string;
+	module: string;
+	screen: string;
+	labelSelf: string;
+	descriptionSelf: string;
+	labelTarget: string;
+	descriptionTarget: string;
+	requiresCanWalk?: boolean;
+	requiresCanChange?: boolean;
+	requiresCanTalk?: boolean;
+	requiresNotRestrained?: boolean;
 }
 
 declare global {
@@ -131,6 +150,195 @@ const MINI_GAMES: readonly MiniGameDefinition[] = Object.freeze([
 ]);
 
 const GAME_LOOKUP = new Map(MINI_GAMES.map((game) => [game.id, game]));
+const ROOM_DEFINITIONS: readonly RoomDefinition[] = Object.freeze([
+	{
+		id: "Cafe",
+		name: "the Cafe",
+		module: "Room",
+		screen: "Cafe",
+		labelSelf: "(Visit the cafe.)",
+		descriptionSelf: "(Leave the chatroom and grab a snack at the cafe.)",
+		labelTarget: "(Invite DialogCharacterObject to the cafe.)",
+		descriptionTarget: "(Requests DialogCharacterObject to accompany you to the cafe.)",
+	},
+	{
+		id: "Arcade",
+		name: "the Arcade",
+		module: "Room",
+		screen: "Arcade",
+		labelSelf: "(Visit the arcade.)",
+		descriptionSelf: "(Walk over to the club's arcade corner.)",
+		labelTarget: "(Invite DialogCharacterObject to the arcade.)",
+		descriptionTarget: "(Requests DialogCharacterObject to follow you to the arcade.)",
+	},
+	{
+		id: "Stable",
+		name: "the Stable",
+		module: "Room",
+		screen: "Stable",
+		labelSelf: "(Walk to the stables.)",
+		descriptionSelf: "(Head over to the horse stables.)",
+		labelTarget: "(Invite DialogCharacterObject to the stables.)",
+		descriptionTarget: "(Requests DialogCharacterObject to join you at the stables.)",
+	},
+	{
+		id: "Magic",
+		name: "the Magic Theater",
+		module: "Room",
+		screen: "Magic",
+		labelSelf: "(Visit the magic theater.)",
+		descriptionSelf: "(Go see what's happening at the magic theater.)",
+		labelTarget: "(Invite DialogCharacterObject to the magic theater.)",
+		descriptionTarget: "(Requests DialogCharacterObject to come with you to the theater.)",
+	},
+	{
+		id: "Nursery",
+		name: "the Nursery",
+		module: "Room",
+		screen: "Nursery",
+		labelSelf: "(Visit the nursery.)",
+		descriptionSelf: "(Step into the nursery area.)",
+		labelTarget: "(Invite DialogCharacterObject to the nursery.)",
+		descriptionTarget: "(Requests DialogCharacterObject to enter the nursery with you.)",
+	},
+	{
+		id: "Gambling",
+		name: "the Gambling Hall",
+		module: "Room",
+		screen: "Gambling",
+		labelSelf: "(Try your luck in the gambling hall.)",
+		descriptionSelf: "(Walk to the main hall's gambling den.)",
+		labelTarget: "(Invite DialogCharacterObject to the gambling hall.)",
+		descriptionTarget: "(Requests DialogCharacterObject to gamble with you.)",
+	},
+	{
+		id: "Prison",
+		name: "the Prison",
+		module: "Room",
+		screen: "Prison",
+		labelSelf: "(Visit the prison wing.)",
+		descriptionSelf: "(Go check on the prison cells.)",
+		labelTarget: "(Invite DialogCharacterObject to the prison wing.)",
+		descriptionTarget: "(Requests DialogCharacterObject to walk to the prison wing with you.)",
+	},
+	{
+		id: "Photographic",
+		name: "the Photographic Studio",
+		module: "Room",
+		screen: "Photographic",
+		labelSelf: "(Visit the photographic studio.)",
+		descriptionSelf: "(Walk over to the photography studio.)",
+		labelTarget: "(Invite DialogCharacterObject to the photographic studio.)",
+		descriptionTarget: "(Requests DialogCharacterObject to have a photoshoot with you.)",
+	},
+	{
+		id: "Private",
+		name: "your Private Room",
+		module: "Room",
+		screen: "Private",
+		labelSelf: "(Go to your private room.)",
+		descriptionSelf: "(Head over to your own private space.)",
+		labelTarget: "(Invite DialogCharacterObject to your private room.)",
+		descriptionTarget: "(Requests DialogCharacterObject to join you in your private room.)",
+	},
+	{
+		id: "KidnapLeague",
+		name: "the Kidnap League",
+		module: "Room",
+		screen: "KidnapLeague",
+		labelSelf: "(Visit the Kidnap League.)",
+		descriptionSelf: "(Walk to the Kidnap League headquarters.)",
+		labelTarget: "(Invite DialogCharacterObject to the Kidnap League.)",
+		descriptionTarget: "(Requests DialogCharacterObject to head to the Kidnap League.)",
+	},
+	{
+		id: "Shibari",
+		name: "the Shibari Dojo",
+		module: "Room",
+		screen: "Shibari",
+		labelSelf: "(Visit the Shibari dojo.)",
+		descriptionSelf: "(Practice knots at the dojo.)",
+		labelTarget: "(Invite DialogCharacterObject to the Shibari dojo.)",
+		descriptionTarget: "(Requests DialogCharacterObject to train with you at the dojo.)",
+	},
+	{
+		id: "SlaveMarket",
+		name: "the Slave Market",
+		module: "Room",
+		screen: "SlaveMarket",
+		labelSelf: "(Visit the slave market.)",
+		descriptionSelf: "(Leave to browse the slave market.)",
+		labelTarget: "(Invite DialogCharacterObject to the slave market.)",
+		descriptionTarget: "(Requests DialogCharacterObject to join you at the market.)",
+	},
+	{
+		id: "Cell",
+		name: "the Holding Cells",
+		module: "Room",
+		screen: "Cell",
+		labelSelf: "(Visit the holding cells.)",
+		descriptionSelf: "(Walk to the detention cells.)",
+		labelTarget: "(Invite DialogCharacterObject to the holding cells.)",
+		descriptionTarget: "(Requests DialogCharacterObject to step into the cells with you.)",
+	},
+	{
+		id: "Shop",
+		name: "the Club Shop",
+		module: "Room",
+		screen: "Shop",
+		labelSelf: "(Visit the club shop.)",
+		descriptionSelf: "(Walk over to the club shop.)",
+		labelTarget: "(Invite DialogCharacterObject to the club shop.)",
+		descriptionTarget: "(Requests DialogCharacterObject to browse the club shop with you.)",
+	},
+	{
+		id: "MagicSchoolLaboratory",
+		name: "the Magic School Laboratory",
+		module: "Room",
+		screen: "MagicSchoolLaboratory",
+		labelSelf: "(Visit the magic school laboratory.)",
+		descriptionSelf: "(Walk to the magic school's lab.)",
+		labelTarget: "(Invite DialogCharacterObject to the magic school laboratory.)",
+		descriptionTarget: "(Requests DialogCharacterObject to join you in the lab.)",
+		requiresCanChange: true,
+	},
+	{
+		id: "Poker",
+		name: "the Poker room",
+		module: "Room",
+		screen: "Poker",
+		labelSelf: "(Head to the poker room.)",
+		descriptionSelf: "(Leave the chat and sit down for poker.)",
+		labelTarget: "(Invite DialogCharacterObject to the poker room.)",
+		descriptionTarget: "(Requests DialogCharacterObject to play poker with you.)",
+		requiresCanChange: true,
+		requiresCanTalk: true,
+		requiresNotRestrained: true,
+	},
+	{
+		id: "Infiltration",
+		name: "the Infiltration training",
+		module: "Room",
+		screen: "Infiltration",
+		labelSelf: "(Visit infiltration training.)",
+		descriptionSelf: "(Walk to the infiltration course.)",
+		labelTarget: "(Invite DialogCharacterObject to infiltration training.)",
+		descriptionTarget: "(Requests DialogCharacterObject to join you in infiltration training.)",
+		requiresCanChange: true,
+	},
+	{
+		id: "MovieStudio",
+		name: "the Movie Studio",
+		module: "Room",
+		screen: "MovieStudio",
+		labelSelf: "(Visit the movie studio.)",
+		descriptionSelf: "(Walk to the film studio.)",
+		labelTarget: "(Invite DialogCharacterObject to the movie studio.)",
+		descriptionTarget: "(Requests DialogCharacterObject to join you on set.)",
+		requiresCanChange: true,
+	},
+]);
+const ROOM_LOOKUP = new Map(ROOM_DEFINITIONS.map((room) => [room.id, room]));
 
 interface OpponentGameConfig {
 	prepareState: (opponent: CharacterLike) => void;
@@ -141,11 +349,15 @@ const SELF_MAIN_STAGE = "100";
 const SELF_SUBMENU_STAGE = "9100";
 const TARGET_MAIN_STAGE = "40";
 const TARGET_SUBMENU_STAGE = "9200";
+const SELF_ROOM_SUBMENU_STAGE = "9300";
+const TARGET_ROOM_SUBMENU_STAGE = "9400";
 
 const SELF_DIALOG_FLAG = Symbol("bcma-self-dialog");
 const TARGET_DIALOG_FLAG = Symbol("bcma-target-dialog");
 const inviteIdToOpponent: Map<string, { gameId: string; opponent: CharacterLike; matchId?: string }> = new Map();
 const pendingInviteResponseIds: Set<string> = new Set();
+const roomInviteIdToOpponent: Map<string, { roomId: string; opponent: CharacterLike }> = new Map();
+const pendingRoomInviteResponseIds: Set<string> = new Set();
 interface TennisSyncState {
 	matchId: string;
 	opponentMember: number;
@@ -225,6 +437,24 @@ function installGlobalHelpers(): void {
 			}
 		};
 	}
+	if (!globalObj.DialogBCMAVisitRoom) {
+		globalObj.DialogBCMAVisitRoom = (id: string): boolean => startRoomTravel(id);
+	}
+	if (!globalObj.DialogBCMAInviteRoom) {
+		globalObj.DialogBCMAInviteRoom = (id: string): boolean => startRoomTravelWithTarget(id);
+	}
+	if (!globalObj.DialogBCMACanShowRoomsSelf) {
+		globalObj.DialogBCMACanShowRoomsSelf = (): boolean => canPlayerTravel() && isInChatRoom();
+	}
+	if (!globalObj.DialogBCMACanShowRoomsTarget) {
+		globalObj.DialogBCMACanShowRoomsTarget = (): boolean => {
+			const target = globalObj.CurrentCharacter;
+			if (!target || target === globalObj.Player) return false;
+			if (typeof target.IsPlayer === "function" && target.IsPlayer()) return false;
+			if (typeof InventoryIsBlockedByDistance === "function" && InventoryIsBlockedByDistance(target)) return false;
+			return canPlayerTravel() && isInChatRoom();
+		};
+	}
 }
 
 function patchCharacterBuildDialog(): void {
@@ -301,7 +531,17 @@ function injectSelfMenu(character: CharacterLike): boolean {
 		Result: "(Pick one of the club's built-in mini-games to play or practice.)",
 		Prerequisite: "DialogBCMACanShowMiniGamesSelf()",
 	})) || modified;
+	modified = ensureDialogLine(dialog, createLine({
+		Stage: SELF_MAIN_STAGE,
+		NextStage: SELF_ROOM_SUBMENU_STAGE,
+		Option: "(BCMA: Visit a club area.)",
+		Result: "(Travel to one of the private club rooms.)",
+		Prerequisite: "DialogBCMACanShowRoomsSelf()",
+	})) || modified;
 	for (const definition of buildSubMenuLines(true)) {
+		modified = ensureDialogLine(dialog, definition) || modified;
+	}
+	for (const definition of buildRoomSubMenuLines(true)) {
 		modified = ensureDialogLine(dialog, definition) || modified;
 	}
 	if (modified) {
@@ -322,7 +562,17 @@ function injectTargetMenu(character: CharacterLike): boolean {
 		Result: "(Pick one of the club's built-in mini-games to launch locally.)",
 		Prerequisite: "DialogBCMACanShowMiniGamesTarget()",
 	})) || modified;
+	modified = ensureDialogLine(dialog, createLine({
+		Stage: TARGET_MAIN_STAGE,
+		NextStage: TARGET_ROOM_SUBMENU_STAGE,
+		Option: "(BCMA: Visit a club area together.)",
+		Result: "(Invite DialogCharacterObject to follow you into one of the club rooms.)",
+		Prerequisite: "DialogBCMACanShowRoomsTarget()",
+	})) || modified;
 	for (const definition of buildSubMenuLines(false)) {
+		modified = ensureDialogLine(dialog, definition) || modified;
+	}
+	for (const definition of buildRoomSubMenuLines(false)) {
 		modified = ensureDialogLine(dialog, definition) || modified;
 	}
 	if (modified) {
@@ -351,6 +601,27 @@ function buildSubMenuLines(selfMenu: boolean): DialogLine[] {
 		NextStage: backNextStage,
 		Option: "(Back to character actions.)",
 		Result: backResult,
+	}));
+	return lines;
+}
+
+function buildRoomSubMenuLines(selfMenu: boolean): DialogLine[] {
+	const submenuStage = selfMenu ? SELF_ROOM_SUBMENU_STAGE : TARGET_ROOM_SUBMENU_STAGE;
+	const backNextStage = selfMenu ? SELF_MAIN_STAGE : TARGET_MAIN_STAGE;
+	const lines: DialogLine[] = [];
+	for (const room of ROOM_DEFINITIONS) {
+		lines.push(createLine({
+			Stage: submenuStage,
+			Option: selfMenu ? room.labelSelf : room.labelTarget,
+			Result: selfMenu ? room.descriptionSelf : room.descriptionTarget,
+			Function: selfMenu ? `DialogBCMAVisitRoom("${room.id}")` : `DialogBCMAInviteRoom("${room.id}")`,
+		}));
+	}
+	lines.push(createLine({
+		Stage: submenuStage,
+		NextStage: backNextStage,
+		Option: "(Back to character actions.)",
+		Result: "(Return to the main list of character interactions.)",
 	}));
 	return lines;
 }
@@ -456,6 +727,63 @@ function startMiniGameWithTarget(id: string): boolean {
 	return true;
 }
 
+function startRoomTravel(id: string): boolean {
+	const definition = ROOM_LOOKUP.get(id);
+	if (!definition) {
+		console.warn("[BCMA] Unknown room requested", id);
+		return false;
+	}
+	if (!isInChatRoom() || !canPlayerTravel() || !meetsRoomRequirements(definition, Player)) {
+		window.alert("BCMA: You cannot travel there right now.");
+		return false;
+	}
+	enterRoom(definition);
+	return true;
+}
+
+function startRoomTravelWithTarget(id: string): boolean {
+	const definition = ROOM_LOOKUP.get(id);
+	if (!definition) {
+		console.warn("[BCMA] Unknown room requested", id);
+		return false;
+	}
+	if (!isInChatRoom() || !canPlayerTravel() || !meetsRoomRequirements(definition, Player)) {
+		window.alert("BCMA: You cannot travel there right now.");
+		return false;
+	}
+	const opponent = CurrentCharacter;
+	if (!opponent || typeof opponent.IsOnline !== "function" || !opponent.IsOnline()) {
+		console.warn("[BCMA] No valid opponent selected for room invite");
+		return false;
+	}
+	if (typeof opponent.MemberNumber !== "number") {
+		console.warn("[BCMA] Target is missing a member number");
+		return false;
+	}
+	if (opponent.IsOwnedByPlayer?.()) {
+		sendHiddenBCMAMessage(opponent.MemberNumber, {
+			action: "roomForce",
+			roomId: id,
+			initiator: Player?.MemberNumber ?? -1,
+		});
+		enterRoom(definition);
+		return true;
+	}
+	const inviteId = generateInviteId();
+	roomInviteIdToOpponent.set(inviteId, { roomId: id, opponent });
+	pendingRoomInviteResponseIds.add(inviteId);
+	sendHiddenBCMAMessage(opponent.MemberNumber, {
+		action: "roomInvite",
+		id: inviteId,
+		roomId: id,
+		initiator: Player?.MemberNumber ?? -1,
+		target: opponent.MemberNumber,
+		initiatorName: getCharacterDisplayName(Player),
+	});
+	window.alert(`BCMA: Invitation sent to ${getCharacterDisplayName(opponent)}.`);
+	return true;
+}
+
 function launchMiniGame(definition: MiniGameDefinition): void {
 	if (typeof MiniGameStart !== "function")
 		return;
@@ -484,23 +812,26 @@ function getCharacterDisplayName(character?: CharacterLike | null): string {
 }
 
 interface BCMAInvitePayloadBase {
-	gameId: string;
+	gameId?: string;
 	matchId?: string;
 }
 interface BCMAInvitePayload extends BCMAInvitePayloadBase {
 	action: "invite";
 	id: string;
+	gameId: string;
 	initiator: number;
 	target: number;
 	initiatorName: string;
 }
 interface BCMAInviteResponsePayload extends BCMAInvitePayloadBase {
 	action: "response";
+	gameId: string;
 	id: string;
 	accepted: boolean;
 }
 interface BCMAForcePayload extends BCMAInvitePayloadBase {
 	action: "forceStart";
+	gameId: string;
 	initiator: number;
 }
 interface BCMATennisScorePayload extends BCMAInvitePayloadBase {
@@ -511,8 +842,34 @@ interface BCMATennisScorePayload extends BCMAInvitePayloadBase {
 	leftPoints: number;
 	rightPoints: number;
 }
+interface BCMARoomInvitePayload extends BCMAInvitePayloadBase {
+	action: "roomInvite";
+	id: string;
+	roomId: string;
+	initiator: number;
+	target: number;
+	initiatorName: string;
+}
+interface BCMARoomResponsePayload extends BCMAInvitePayloadBase {
+	action: "roomResponse";
+	id: string;
+	roomId: string;
+	accepted: boolean;
+}
+interface BCMARoomForcePayload extends BCMAInvitePayloadBase {
+	action: "roomForce";
+	roomId: string;
+	initiator: number;
+}
 
-type BCMAHiddenPayload = BCMAInvitePayload | BCMAInviteResponsePayload | BCMAForcePayload | BCMATennisScorePayload;
+type BCMAHiddenPayload =
+	| BCMAInvitePayload
+	| BCMAInviteResponsePayload
+	| BCMAForcePayload
+	| BCMATennisScorePayload
+	| BCMARoomInvitePayload
+	| BCMARoomResponsePayload
+	| BCMARoomForcePayload;
 
 function sendHiddenBCMAMessage(target: number, payload: BCMAHiddenPayload): void {
 	if (!ServerPlayerIsInChatRoom()) return;
@@ -555,6 +912,15 @@ function handleBCMAHiddenMessage(sender: number, payload: BCMAHiddenPayload): vo
 			break;
 		case "tennisScore":
 			handleTennisScore(payload);
+			break;
+		case "roomInvite":
+			handleRoomInvite(sender, payload);
+			break;
+		case "roomResponse":
+			handleRoomResponse(payload);
+			break;
+		case "roomForce":
+			handleRoomForce(sender, payload);
 			break;
 		default:
 			break;
@@ -630,6 +996,61 @@ function handleForceStart(sender: number, payload: BCMAForcePayload): void {
 	opponentConfig.prepareState(opponent);
 	opponentConfig.initSync?.(opponent, payload.matchId ?? generateMatchId());
 	launchMiniGame(definition);
+}
+
+function handleRoomInvite(sender: number, payload: BCMARoomInvitePayload): void {
+	if (payload.target !== Player?.MemberNumber) return;
+	const opponent = findChatRoomCharacter(sender);
+	const room = ROOM_LOOKUP.get(payload.roomId);
+	if (!room || !opponent || !meetsRoomRequirements(room, Player)) {
+		sendHiddenBCMAMessage(sender, {
+			action: "roomResponse",
+			id: payload.id,
+			roomId: payload.roomId,
+			accepted: false,
+		});
+		return;
+	}
+	showInvitePrompt(`${payload.initiatorName} wants to bring you to ${room.name}. Accept?`, () => {
+		enterRoom(room);
+		sendHiddenBCMAMessage(sender, {
+			action: "roomResponse",
+			id: payload.id,
+			roomId: payload.roomId,
+			accepted: true,
+		});
+		closeInvitePrompt();
+	}, () => {
+		sendHiddenBCMAMessage(sender, {
+			action: "roomResponse",
+			id: payload.id,
+			roomId: payload.roomId,
+			accepted: false,
+		});
+		closeInvitePrompt();
+	});
+}
+
+function handleRoomResponse(payload: BCMARoomResponsePayload): void {
+	if (!pendingRoomInviteResponseIds.has(payload.id)) return;
+	pendingRoomInviteResponseIds.delete(payload.id);
+	const info = roomInviteIdToOpponent.get(payload.id);
+	roomInviteIdToOpponent.delete(payload.id);
+	if (!info) return;
+	if (!payload.accepted) {
+		window.alert("BCMA: Invitation declined.");
+		return;
+	}
+	const room = ROOM_LOOKUP.get(info.roomId);
+	if (!room || !meetsRoomRequirements(room, Player)) return;
+	enterRoom(room);
+}
+
+function handleRoomForce(sender: number, payload: BCMARoomForcePayload): void {
+	const room = ROOM_LOOKUP.get(payload.roomId);
+	if (!room || !meetsRoomRequirements(room, Player)) return;
+	if (!findChatRoomCharacter(sender)) return;
+	enterRoom(room);
 }
 
 let invitePromptElement: HTMLDivElement | null = null;
@@ -787,8 +1208,62 @@ function recordTennisScore(): void {
 	});
 }
 
+function handleTennisScore(payload: BCMATennisScorePayload): void {
+	if (!tennisSync || payload.matchId !== tennisSync.matchId)
+		return;
+	suppressTennisBroadcast = true;
+	try {
+		const globalObj = globalThis as Record<string, any>;
+		const playerMember = Player?.MemberNumber;
+		if (playerMember && payload.leftMember === playerMember) {
+			globalObj.TennisCharacterLeftPoint = payload.leftPoints;
+			globalObj.TennisCharacterRightPoint = payload.rightPoints;
+		} else if (playerMember && payload.rightMember === playerMember) {
+			globalObj.TennisCharacterLeftPoint = payload.rightPoints;
+			globalObj.TennisCharacterRightPoint = payload.leftPoints;
+		} else {
+			globalObj.TennisCharacterLeftPoint = payload.leftPoints;
+			globalObj.TennisCharacterRightPoint = payload.rightPoints;
+		}
+		tennisSync.lastLeft = typeof globalObj.TennisCharacterLeftPoint === "number" ? globalObj.TennisCharacterLeftPoint : 0;
+		tennisSync.lastRight = typeof globalObj.TennisCharacterRightPoint === "number" ? globalObj.TennisCharacterRightPoint : 0;
+	} finally {
+		suppressTennisBroadcast = false;
+	}
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
+}
+
+function meetsRoomRequirements(room: RoomDefinition, actor?: CharacterLike | null): boolean {
+	const target = actor ?? null;
+	if (!target) return false;
+	const requiresCanWalk = room.requiresCanWalk !== false;
+	if (requiresCanWalk && typeof target.CanWalk === "function" && !target.CanWalk()) return false;
+	if (room.requiresCanChange && typeof target.CanChangeOwnClothes === "function" && !target.CanChangeOwnClothes()) return false;
+	if (room.requiresCanTalk && typeof target.CanTalk === "function" && !target.CanTalk()) return false;
+	if (room.requiresNotRestrained && typeof target.IsRestrained === "function" && target.IsRestrained()) return false;
+	return true;
+}
+
+function enterRoom(room: RoomDefinition): void {
+	if (typeof CommonSetScreen !== "function") {
+		console.warn("[BCMA] Cannot move to room, CommonSetScreen unavailable");
+		return;
+	}
+	try {
+		CommonSetScreen(room.module, room.screen);
+	} catch (error) {
+		console.error("[BCMA] Failed to move to room", room.id, error);
+	}
+}
+
+function canPlayerTravel(): boolean {
+	const actor = Player;
+	if (!actor) return false;
+	if (typeof actor.CanWalk === "function" && !actor.CanWalk()) return false;
+	return true;
 }
 
 export {};
